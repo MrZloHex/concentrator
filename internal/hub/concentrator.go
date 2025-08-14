@@ -1,14 +1,12 @@
 package hub
 
 import (
-	"log/slog"
+	log "log/slog"
 	"net/http"
 
 	"concentrator/internal/syncmap"
 	ws "github.com/gorilla/websocket"
 )
-
-var log = slog.Default()
 
 type packet struct {
 	kind int

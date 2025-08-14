@@ -1,6 +1,9 @@
 package hub
 
-import ws "github.com/gorilla/websocket"
+import (
+	log "log/slog"
+	ws "github.com/gorilla/websocket"
+)
 
 type shard struct {
 	conn    *ws.Conn
