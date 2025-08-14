@@ -1,35 +1,42 @@
-package main;
+package main
 
-import ws "github.com/gorilla/websocket";
+import ws "github.com/gorilla/websocket"
 
 type Shard struct {
-	conn   *ws.Conn;
+	conn    *ws.Conn
 	hub     chan<- packet
-	online  bool
-};
+	onClose func(*Shard)
+}
 
 func newShard(conn *ws.Conn, income chan<- packet) *Shard {
-	return &Shard {
-		conn:   conn,
-		hub:    income,
-		online: true,
-	};
+	return &Shard{
+		conn: conn,
+		hub:  income,
+	}
 }
 
 func (shard *Shard) glisten() {
+	defer shard.conn.Close()
+
 	for {
-		kind, pay, err := shard.conn.ReadMessage();
+		kind, pay, err := shard.conn.ReadMessage()
 		if err != nil {
-			break;
+			break
 		}
 
-		shard.hub <- packet{kind, pay};
+		shard.hub <- packet{kind: kind, pay: pay}
 	}
-	log.Info("Disconnected", "addr", shard.conn.RemoteAddr());
-	shard.online = false;
+
+	if shard.onClose != nil {
+		shard.onClose(shard)
+	}
+
+	log.Info("Disconnected", "addr", shard.conn.RemoteAddr())
 }
 
 func (shard *Shard) absorb(pack packet) bool {
-	shard.conn.WriteMessage(pack.kind, pack.pay);
-	return shard.online;
+	if err := shard.conn.WriteMessage(pack.kind, pack.pay); err != nil {
+		return false
+	}
+	return true
 }
