@@ -18,14 +18,14 @@ func newShard(conn *ws.Conn, income chan<- packet) *Shard {
 func (shard *Shard) glisten() {
 	defer shard.conn.Close()
 
-	for {
-		kind, pay, err := shard.conn.ReadMessage()
-		if err != nil {
-			break
-		}
+    for {
+        kind, pay, err := shard.conn.ReadMessage()
+        if err != nil {
+            break
+        }
 
-		shard.hub <- packet{kind: kind, pay: pay}
-	}
+        shard.hub <- packet{kind: kind, pay: pay, from: shard}
+    }
 
 	if shard.onClose != nil {
 		shard.onClose(shard)

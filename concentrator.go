@@ -6,6 +6,7 @@ import ws "github.com/gorilla/websocket"
 type packet struct {
 	kind int
 	pay  []byte
+    from *Shard
 }
 
 type Concentrator struct {
@@ -44,13 +45,16 @@ func (cctr *Concentrator) accept(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cctr *Concentrator) serve() {
-	for {
-		pack := <-cctr.income
+    for {
+        pack := <-cctr.income
 
-		for _, sh := range cctr.shards.Keys() {
-			if ok := sh.absorb(pack); !ok {
-				cctr.shards.Delete(sh)
-			}
-		}
-	}
+        for _, sh := range cctr.shards.Keys() {
+            if sh == pack.from {
+                continue
+            }
+            if ok := sh.absorb(pack); !ok {
+                cctr.shards.Delete(sh)
+            }
+        }
+    }
 }
