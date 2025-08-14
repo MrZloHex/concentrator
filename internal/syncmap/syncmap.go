@@ -1,4 +1,4 @@
-package main
+package syncmap
 
 import "sync"
 import "slices"
@@ -9,7 +9,7 @@ type Map[K comparable, V any] struct {
 	mu      sync.RWMutex
 }
 
-func NewMap[K comparable, V any]() *Map[K, V] {
+func New[K comparable, V any]() *Map[K, V] {
 	return &Map[K, V]{
 		entries: make(map[K]V),
 	}
