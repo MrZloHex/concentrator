@@ -4,8 +4,9 @@ import (
 	log "log/slog"
 	"net/http"
 
-	"concentrator/internal/syncmap"
 	ws "github.com/gorilla/websocket"
+
+	"concentrator/internal/syncmap"
 )
 
 type packet struct {
@@ -49,11 +50,14 @@ func (h *Hub) Accept(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) Run() {
 	for {
 		pack := <-h.income
+
+		log.Debug("Got", "msg", string(pack.pay))
 		for _, s := range h.shards.Keys() {
 			if s == pack.from {
 				continue
 			}
-			if ok := s.absorb(pack); !ok {
+			ok := s.absorb(pack)
+			if !ok {
 				h.shards.Delete(s)
 			}
 		}

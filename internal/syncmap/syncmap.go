@@ -1,8 +1,10 @@
 package syncmap
 
-import "sync"
-import "slices"
-import "maps"
+import (
+	"maps"
+	"slices"
+	"sync"
+)
 
 type Map[K comparable, V any] struct {
 	entries map[K]V

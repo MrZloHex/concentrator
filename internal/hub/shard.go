@@ -1,8 +1,8 @@
 package hub
 
 import (
-	log "log/slog"
 	ws "github.com/gorilla/websocket"
+	log "log/slog"
 )
 
 type shard struct {
@@ -31,8 +31,6 @@ func (s *shard) glisten() {
 }
 
 func (s *shard) absorb(pack packet) bool {
-	if err := s.conn.WriteMessage(pack.kind, pack.pay); err != nil {
-		return false
-	}
-	return true
+	err := s.conn.WriteMessage(pack.kind, pack.pay)
+	return err == nil
 }

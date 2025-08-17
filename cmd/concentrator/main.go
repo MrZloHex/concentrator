@@ -5,21 +5,28 @@ import (
 	"net/http"
 	"os"
 
-	log "log/slog"
 	"github.com/lmittmann/tint"
 	cli "github.com/spf13/pflag"
+	log "log/slog"
 
 	"concentrator/internal/hub"
 )
 
+var logLevelMap = map[string]log.Level{
+	"debug": log.LevelDebug,
+	"info":  log.LevelInfo,
+	"warn":  log.LevelWarn,
+	"error": log.LevelError,
+}
 
 func main() {
 	port := cli.Uint16P("port", "p", 8092, "Host port")
+	logLevel := cli.StringP("log", "l", "info", "Log level")
 	cli.Parse()
 
 	log.SetDefault(log.New(
 		tint.NewHandler(os.Stdout, &tint.Options{
-			Level:      log.LevelDebug,
+			Level: logLevelMap[*logLevel],
 		}),
 	))
 	log.Info("BOOTING UP ON", "port", *port)
