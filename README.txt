@@ -22,6 +22,8 @@
   ▪ Broadcast fan-out excluding sender
   ▪ Thread-safe client registry
   ▪ Structured logging (`slog` + `tint`)
+  ▪ Optional `.env` configuration
+  ▪ Optional HTTPS with mutual TLS (mTLS)
   ▪ Single binary, minimal configuration
   
   ──────────────────────────────────────────────────────────────────────────────
@@ -44,41 +46,38 @@
   ```
   
   ──────────────────────────────────────────────────────────────────────────────
-  ▓ HTTP / WS API
-  `GET /` — Upgrades to WebSocket
-  • Text & binary frames accepted
-  • No application protocol enforced (pure relay/bus)
-  
-  ──────────────────────────────────────────────────────────────────────────────
   ▓ CONFIGURATION
   Flags:
   • `--port`, `-p` : TCP port to listen on (default 8092)
+  • `--log`, `-l` : log level (`debug`, `info`, `warn`, `error`)
+  • `--tls-cert` : server certificate in PEM format
+  • `--tls-key` : server private key in PEM format
+  • `--tls-client-ca` : PEM bundle of CAs used to verify client certificates
+
+  Environment variables (used as defaults for flags):
+  • `CONCENTRATOR_PORT`
+  • `CONCENTRATOR_LOG`
+  • `CONCENTRATOR_TLS_CERT`
+  • `CONCENTRATOR_TLS_KEY`
+  • `CONCENTRATOR_TLS_CLIENT_CA`
+
+  `.env`:
+  • `.env` is loaded automatically from the current working directory (optional)
+  • command-line flags override values from environment/.env
+
+  mTLS:
+  • when TLS is enabled, this service requires client certificates
+  • `--tls-cert`, `--tls-key`, and `--tls-client-ca` must all be set
+  • clients must connect with `wss://` and present a valid client certificate
+
+  Example:
+  ```sh
+  ./bin/concentrator -p 8092 \
+    --tls-cert certs/server.crt \
+    --tls-key certs/server.key \
+    --tls-client-ca certs/client-ca.pem
+  ```
+
   Origin checks: **permissive** for development — restrict in
   `internal/hub/concentrator.go` by editing `CheckOrigin` before deployment.
-  
-  ──────────────────────────────────────────────────────────────────────────────
-  ▓ REPOSITORY LAYOUT
-  ```
-  .
-  ├── cmd/
-  │   └── concentrator/
-  │       └── main.go           # CLI/bootstrap only
-  ├── internal/
-  │   ├── hub/
-  │   │   ├── concentrator.go   # Hub: accepts connections & broadcasts
-  │   │   └── shard.go          # Per-connection read loop & write wrapper
-  │   └── syncmap/
-  │       └── syncmap.go        # Generic mutex-protected map utility
-  ├── go.mod
-  ├── go.sum
-  ├── .gitignore
-  └── README.txt
-  ```
-  
-  ──────────────────────────────────────────────────────────────────────────────
-  ▓ HOW IT WORKS
-  1) HTTP `GET /` → upgrade to WebSocket (**shard**)
-  2) Each shard reads frames, tags them with sender, sends into hub
-  3) Hub broadcasts to all shards except sender; write failures drop shard
-  4) On shard close, `onClose` unregisters it immediately
   
