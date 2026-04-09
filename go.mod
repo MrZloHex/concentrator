@@ -7,3 +7,5 @@ require (
 	github.com/lmittmann/tint v1.1.2
 	github.com/spf13/pflag v1.0.7
 )
+
+require github.com/joho/godotenv v1.5.1

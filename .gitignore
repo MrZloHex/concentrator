@@ -2,3 +2,5 @@
 concetrator
 bin/
 logs/
+certs/
+.env
