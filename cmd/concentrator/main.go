@@ -1,20 +1,22 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/lmittmann/tint"
 	cli "github.com/spf13/pflag"
 	log "log/slog"
+
+	auth "github.com/MrZloHex/monolink/marshal"
 
 	"concentrator/internal/hub"
 )
@@ -26,113 +28,30 @@ var logLevelMap = map[string]log.Level{
 	"error": log.LevelError,
 }
 
-type TeeHandler struct {
-	handlers []log.Handler
-}
-
-func (t *TeeHandler) Enabled(ctx context.Context, level log.Level) bool {
-	for _, h := range t.handlers {
-		if h.Enabled(ctx, level) {
-			return true
-		}
-	}
-	return false
-}
-
-func (t *TeeHandler) Handle(ctx context.Context, r log.Record) error {
-	var err error
-	for _, h := range t.handlers {
-		if h.Enabled(ctx, r.Level) {
-			if e := h.Handle(ctx, r); e != nil {
-				err = e
-			}
-		}
-	}
-	return err
-}
-
-func (t *TeeHandler) WithAttrs(attrs []log.Attr) log.Handler {
-	newHs := make([]log.Handler, len(t.handlers))
-	for i, h := range t.handlers {
-		newHs[i] = h.WithAttrs(attrs)
-	}
-	return &TeeHandler{handlers: newHs}
-}
-
-func (t *TeeHandler) WithGroup(name string) log.Handler {
-	newHs := make([]log.Handler, len(t.handlers))
-	for i, h := range t.handlers {
-		newHs[i] = h.WithGroup(name)
-	}
-	return &TeeHandler{handlers: newHs}
-}
-
-func NewTee(handlers ...log.Handler) log.Handler {
-	return &TeeHandler{handlers: handlers}
-}
-
-func initLogging(logLevel log.Level) func() {
-	stdoutHandler := tint.NewHandler(os.Stdout, &tint.Options{
-		Level: logLevel,
-	})
-
-	_ = os.MkdirAll("logs", 0o755)
-	pid := os.Getpid()
-	filename := fmt.Sprintf("%d_concentrator.log", pid)
-	// filename = fmt.Sprintf("%d_concentrator_%s.log", pid, time.Now().Format("2006-01-02"))
-
-	path := filepath.Join("logs", filename)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		// Fallback: stdout only
-		log.SetDefault(log.New(stdoutHandler))
-		log.Error("failed to open file log", "err", err)
-		return func() {}
-	}
-
-	fileHandler := tint.NewHandler(f, &tint.Options{
-		Level: log.LevelDebug, // DEBUG and above to file
-	})
-
-	// Fan-out to both handlers
-	log.SetDefault(log.New(NewTee(stdoutHandler, fileHandler)))
-
-	_ = os.Remove(filepath.Join("logs", "concentrator.current.log"))
-	_ = os.Symlink(filename, filepath.Join("logs", "concentrator.current.log"))
-
-	return func() {
-		_ = f.Sync()
-		_ = f.Close()
-	}
-}
-
+// buildTLSConfig is mutual TLS: the hub's certificate, and every client's
+// checked against the one CA that issues the bubble's (hub.ClientCAPool).
+// TLS 1.3 only: every client on the bus is Go. ukaz's library may need 1.2
+// when it joins; that is a decision for then, not a door left open now.
 func buildTLSConfig(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
 	serverCert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load server certificate: %w", err)
 	}
-
-	cfg := &tls.Config{
+	pem, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read the client CA: %w", err)
+	}
+	pool, ca, err := hub.ClientCAPool(pem)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", clientCAFile, err)
+	}
+	log.Info("CLIENT CA", "subject", ca.Subject.String(), "until", ca.NotAfter.Format(time.DateOnly))
+	return &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
-		MinVersion:   tls.VersionTLS12,
-	}
-
-	if clientCAFile != "" {
-		pem, err := os.ReadFile(clientCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read client CA bundle: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("no certificates parsed from client CA file %q", clientCAFile)
-		}
-		cfg.ClientAuth = tls.RequireAndVerifyClientCert
-		cfg.ClientCAs = pool
-	} else {
-		cfg.ClientAuth = tls.NoClientCert
-	}
-
-	return cfg, nil
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS13,
+	}, nil
 }
 
 func loadDotEnv() {
@@ -172,55 +91,76 @@ func envUint16(key string, fallback uint16) uint16 {
 func main() {
 	loadDotEnv()
 
-	defaultPort := envUint16("CONCENTRATOR_PORT", 8092)
-	defaultLog := envString("CONCENTRATOR_LOG", "info")
-	defaultCert := os.Getenv("CONCENTRATOR_TLS_CERT")
-	defaultKey := os.Getenv("CONCENTRATOR_TLS_KEY")
-	defaultClientCA := os.Getenv("CONCENTRATOR_TLS_CLIENT_CA")
-
-	port := cli.Uint16P("port", "p", defaultPort, "Host port (env CONCENTRATOR_PORT)")
-	logLevel := cli.StringP("log", "l", defaultLog, "Log level (env CONCENTRATOR_LOG)")
-	tlsCert := cli.String("tls-cert", defaultCert, "Path to server TLS certificate (PEM); enables HTTPS when set with --tls-key (env CONCENTRATOR_TLS_CERT)")
-	tlsKey := cli.String("tls-key", defaultKey, "Path to server TLS private key (PEM) (env CONCENTRATOR_TLS_KEY)")
-	tlsClientCA := cli.String("tls-client-ca", defaultClientCA, "Path to PEM bundle of CAs for verifying client certificates (mTLS) (env CONCENTRATOR_TLS_CLIENT_CA)")
+	port := cli.Uint16P("port", "p", envUint16("CONCENTRATOR_PORT", 8443), "Host port (env CONCENTRATOR_PORT)")
+	logLevel := cli.StringP("log", "l", envString("CONCENTRATOR_LOG", "info"), "Log level (env CONCENTRATOR_LOG)")
+	tlsCert := cli.String("tls-cert", os.Getenv("CONCENTRATOR_TLS_CERT"), "The hub's TLS certificate, PEM (env CONCENTRATOR_TLS_CERT)")
+	tlsKey := cli.String("tls-key", os.Getenv("CONCENTRATOR_TLS_KEY"), "The hub's TLS private key, PEM (env CONCENTRATOR_TLS_KEY)")
+	tlsClientCA := cli.String("tls-client-ca", os.Getenv("CONCENTRATOR_TLS_CLIENT_CA"), "The one CA that issues the bus's certificates, alone, PEM (env CONCENTRATOR_TLS_CLIENT_CA)")
+	policyPath := cli.String("policy", envString("CONCENTRATOR_POLICY", "policy"), "Who may join the bus, as what, and what each may send (env CONCENTRATOR_POLICY)")
+	revokedPath := cli.String("revoked", os.Getenv("CONCENTRATOR_REVOKED"), "Revoked certificate serials, one per line (env CONCENTRATOR_REVOKED)")
+	ticketKey := cli.String("ticket-key", envString("CONCENTRATOR_TICKET_KEY", "ticket.pub"), "marshal's public key, to check tickets with, PEM (env CONCENTRATOR_TICKET_KEY)")
 	cli.Parse()
 
-	flush := initLogging(logLevelMap[*logLevel])
-	defer flush()
+	// Standard output only: the journal keeps it. Frames are never logged,
+	// at any level — they carry session tokens, proofs and messages.
+	log.SetDefault(log.New(tint.NewHandler(os.Stdout, &tint.Options{Level: logLevelMap[*logLevel]})))
 
-	addr := fmt.Sprintf(":%d", *port)
-	log.Info("BOOTING UP ON", "addr", addr)
-
-	h := hub.New()
-	go h.Run()
-
-	http.HandleFunc("/", h.Accept)
-
-	var err error
-	if *tlsCert != "" || *tlsKey != "" || *tlsClientCA != "" {
-		if *tlsCert == "" || *tlsKey == "" {
-			log.Error("TLS flags incomplete: --tls-cert and --tls-key are required when using TLS")
-			os.Exit(1)
-		}
-		if *tlsClientCA == "" {
-			log.Error("mTLS requires --tls-client-ca (PEM bundle of CAs that issued client certificates)")
-			os.Exit(1)
-		}
-		tlsCfg, terr := buildTLSConfig(*tlsCert, *tlsKey, *tlsClientCA)
-		if terr != nil {
-			log.Error("TLS configuration failed", "err", terr)
-			os.Exit(1)
-		}
-		srv := &http.Server{
-			Addr:      addr,
-			TLSConfig: tlsCfg,
-		}
-		log.Info("listening with mTLS", "cert", *tlsCert, "client_ca", *tlsClientCA)
-		err = srv.ListenAndServeTLS("", "")
-	} else {
-		log.Warn("listening with NO mTLS")
-		err = http.ListenAndServe(addr, nil)
+	if *tlsCert == "" || *tlsKey == "" || *tlsClientCA == "" {
+		log.Error("the hub runs only with mutual TLS: --tls-cert, --tls-key and --tls-client-ca are required")
+		os.Exit(1)
+	}
+	tlsCfg, err := buildTLSConfig(*tlsCert, *tlsKey, *tlsClientCA)
+	if err != nil {
+		log.Error("TLS configuration failed", "err", err)
+		os.Exit(1)
+	}
+	policy, err := hub.LoadPolicy(*policyPath, *revokedPath)
+	if err != nil {
+		log.Error("policy", "err", err)
+		os.Exit(1)
 	}
 
-	log.Error("Failed to serve", "err", err)
+	pub, err := auth.LoadTicketPublicKey(*ticketKey)
+	if err != nil {
+		log.Error("ticket key", "err", err)
+		os.Exit(1)
+	}
+
+	h := hub.New(policy, hub.TLSIdentity, hub.Options{TicketKey: pub})
+	go h.Run()
+
+	// SIGHUP reads the policy and the revoked list again; a connection they
+	// no longer admit is dropped at once. A policy that does not parse is
+	// refused, and the one in force stays.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for range hup {
+			p, err := hub.LoadPolicy(*policyPath, *revokedPath)
+			if err != nil {
+				log.Error("policy not reloaded", "err", err)
+				continue
+			}
+			h.Reload(p)
+			log.Info("POLICY RELOADED")
+		}
+	}()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", h.Accept)
+	// The timeouts are for the request before it becomes a bus connection,
+	// and for connections that never do; a shard sets its own deadlines on
+	// every read and write once upgraded.
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", *port),
+		Handler:           mux,
+		TLSConfig:         tlsCfg,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       time.Minute,
+		MaxHeaderBytes:    8 << 10,
+	}
+	log.Info("LISTENING", "addr", srv.Addr, "policy", *policyPath, "revoked", *revokedPath)
+	log.Error("Failed to serve", "err", srv.ListenAndServeTLS("", ""))
+	os.Exit(1)
 }

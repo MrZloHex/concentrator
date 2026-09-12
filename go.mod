@@ -1,6 +1,6 @@
 module concentrator
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
@@ -9,3 +9,5 @@ require (
 )
 
 require github.com/joho/godotenv v1.5.1
+
+require github.com/MrZloHex/monolink v0.3.0

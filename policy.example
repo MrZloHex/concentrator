@@ -1,0 +1,38 @@
+# Who may be on the bus, as what, what each may send, and what it hears.
+# SECURITY.txt §5.
+#
+#   <certificate CN>  <node>  node   [<may send>...]  [hears <announcement>...]
+#   <certificate CN>  <node>  panel
+#
+# A certificate not listed here may not connect. A node is one
+# certificate's — a second line for the same node is an error — and holds
+# one connection: a second, while the first is up, is refused and logged.
+#
+# A pattern is written as a grant is: an action, or a prefix of one ending
+# in "*". What a node sends is TO.VERB.NOUN. Without a pattern it may answer
+# what it is asked and announce its own PUB and REG to ALL; anything else
+# must be listed. It is given every request put to it; of what others
+# announce — PUB, REG, FIRE, written FROM.VERB.NOUN — only what follows
+# "hears".
+#
+# A panel is a person's door, and lists nothing. It may do nothing but sign
+# in until it shows the hub a ticket marshal signed for its person; then it
+# speaks as <node>.<person>, sends what the ticket's grants cover, and hears
+# the announcements they cover.
+#
+# The bus carries monolink v2 only (SPEC §44). A node still sending v1 is
+# connected, and every frame it sends is dropped.
+#
+# After editing: kill -HUP the concentrator. Whoever the new policy no
+# longer admits as they were is dropped at once.
+
+achtung        ACHTUNG    node    ALL.FIRE.* VERTEX.SET.BUZZ.STATE
+governor       GOVERNOR   node
+marshal        MARSHAL    node    UKAZ.PRINT.*
+synapse        SYNAPSE    node    MARSHAL.GET.PEOPLE    hears MARSHAL.PUB.PEOPLE
+ukaz           UKAZ       node    GOVERNOR.GET.* ACHTUNG.GET.UPTIME VERTEX.GET.UPTIME    hears ACHTUNG.FIRE.*
+vertex         VERTEX     node    # uart2ws, for vertex
+
+portal         MONOWEB    panel
+monoview       MONOVIEW   panel
+# Two monoviews cannot share MONOVIEW: a node is one certificate's.
