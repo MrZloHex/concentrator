@@ -10,4 +10,4 @@ require (
 
 require github.com/joho/godotenv v1.5.1
 
-require github.com/MrZloHex/monolink v0.3.0
+require github.com/MrZloHex/monolink v0.3.1
